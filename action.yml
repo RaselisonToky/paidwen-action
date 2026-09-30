@@ -1,0 +1,112 @@
+name: Paidwen
+description: Verify a pull request by running it. The Paidwen workflow starts this action for the Paidwen GitHub App.
+author: Paidwen
+branding:
+  icon: check-circle
+  color: orange
+inputs:
+  verification:
+    description: The identifier of the Paidwen verification.
+    required: true
+  api:
+    description: The address of the Paidwen API.
+    required: true
+  pr:
+    description: The number of the pull request.
+    required: true
+  head:
+    description: The commit to verify.
+    required: true
+  base:
+    description: The base commit.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Request the OIDC token
+      id: oidc
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        mkdir -p "$RUNNER_TEMP/paidwen"
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "Paidwen: the job needs the permission id-token: write." >&2
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        status=0
+        printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          | curl -s -f --retry 3 -m 30 -H @- -o "$RUNNER_TEMP/paidwen/oidc.json" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=paidwen" || status=$?
+        if [ "$status" -ne 0 ]; then
+          echo "Paidwen: GitHub did not return an OIDC token (curl exit code $status)." >&2
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        chmod 600 "$RUNNER_TEMP/paidwen/oidc.json"
+        echo "ready=true" >> "$GITHUB_OUTPUT"
+
+    - name: Download and verify the Paidwen engine
+      id: exchange
+      if: steps.oidc.outputs.ready == 'true'
+      shell: bash
+      env:
+        PAIDWEN_API: ${{ inputs.api }}
+        PAIDWEN_VERIFICATION: ${{ inputs.verification }}
+      run: node "$GITHUB_ACTION_PATH/bootstrap/exchange.mjs"
+
+    - name: Verify the pull request
+      if: steps.exchange.outputs.ready == 'true'
+      shell: bash
+      env:
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
+        ACTIONS_ID_TOKEN_REQUEST_URL: ""
+        VERIFY_HEAD: ${{ inputs.head }}
+        VERIFY_BASE: ${{ inputs.base }}
+        VERIFY_ID: ${{ inputs.verification }}
+        VERIFY_LOCALE: ${{ steps.exchange.outputs.locale }}
+      run: |
+        unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+        dir="$RUNNER_TEMP/paidwen"
+        node "$dir/engine/host.mjs" verify \
+          repo="$GITHUB_WORKSPACE" \
+          base="$VERIFY_BASE" \
+          head="$VERIFY_HEAD" \
+          work="$dir/work" \
+          engine="$dir/engine" \
+          run_id="v${VERIFY_ID:0:8}a${GITHUB_RUN_ATTEMPT}" \
+          locale="$VERIFY_LOCALE" \
+          deadline="${PAIDWEN_DEADLINE:-}"
+
+    - name: Keep the video
+      id: upload
+      if: always() && steps.exchange.outputs.ready == 'true'
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: paidwen-video-${{ inputs.verification }}
+        path: ${{ runner.temp }}/paidwen/work/shared/verdict.mp4
+        retention-days: 90
+        if-no-files-found: ignore
+        overwrite: true
+
+    - name: Send the verdict to Paidwen
+      if: always() && steps.exchange.outputs.ready == 'true'
+      shell: bash
+      env:
+        SUBMIT_API: ${{ inputs.api }}
+        SUBMIT_HEAD: ${{ inputs.head }}
+        SUBMIT_BASE: ${{ inputs.base }}
+        SUBMIT_LOCALE: ${{ steps.exchange.outputs.locale }}
+        SUBMIT_VIDEO: ${{ steps.upload.outputs.artifact-url }}
+      run: |
+        dir="$RUNNER_TEMP/paidwen"
+        node "$dir/engine/host.mjs" submit \
+          work="$dir/work" \
+          api="$SUBMIT_API" \
+          token_file="$dir/token" \
+          video_url="$SUBMIT_VIDEO" \
+          head="$SUBMIT_HEAD" \
+          base="$SUBMIT_BASE" \
+          locale="$SUBMIT_LOCALE"

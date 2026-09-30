@@ -1,0 +1,129 @@
+name: Paidwen verification
+on:
+  workflow_call:
+    inputs:
+      verification:
+        description: The identifier of the Paidwen verification.
+        type: string
+        required: true
+      pr:
+        description: The number of the pull request.
+        type: string
+        required: true
+      head:
+        description: The commit to verify.
+        type: string
+        required: true
+      base:
+        description: The base commit.
+        type: string
+        required: true
+      environment:
+        description: The GitHub environment of the job, paidwen or paidwen-fork.
+        type: string
+        required: true
+      api:
+        description: The address of the Paidwen API.
+        type: string
+        required: true
+jobs:
+  verify:
+    name: Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment == 'paidwen' && 'paidwen' || 'paidwen-fork' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Set the deadline of the engine
+        shell: bash
+        run: echo "PAIDWEN_DEADLINE=$(( $(date +%s) + 50 * 60 ))" >> "$GITHUB_ENV"
+
+      - name: Check out the pull request
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out the pull request from its fork
+        if: steps.checkout.outcome == 'failure' && inputs.pr != ''
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr }}/head
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Find the commits
+        id: commits
+        shell: bash
+        env:
+          HEAD_SHA: ${{ inputs.head }}
+          BASE_SHA: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          refuse() {
+            echo "Paidwen: $1" >&2
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          for sha in "$HEAD_SHA" "$BASE_SHA"; do
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || refuse "the inputs head and base must be commit SHAs."
+          done
+          git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null \
+            || refuse "the commit $HEAD_SHA is not in the repository."
+          if git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "base-missing=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "base-missing=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the base commit
+        if: steps.commits.outputs.ready == 'true' && steps.commits.outputs.base-missing == 'true'
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select the pull request
+        id: select
+        if: steps.commits.outputs.ready == 'true'
+        shell: bash
+        env:
+          HEAD_SHA: ${{ inputs.head }}
+          BASE_SHA: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          refuse() {
+            echo "Paidwen: $1" >&2
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || refuse "the base commit $BASE_SHA is not in the repository."
+          git -c advice.detachedHead=false checkout --quiet --force --detach "$HEAD_SHA" \
+            || refuse "the commit $HEAD_SHA could not be checked out."
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify with Paidwen
+        if: steps.select.outputs.ready == 'true'
+        uses: RaselisonToky/paidwen-action@v1
+        with:
+          verification: ${{ inputs.verification }}
+          api: ${{ inputs.api }}
+          pr: ${{ inputs.pr }}
+          head: ${{ inputs.head }}
+          base: ${{ inputs.base }}
+        env:
+          PAIDWEN_TEST_LOGIN: ${{ inputs.environment == 'paidwen' && secrets.PAIDWEN_TEST_LOGIN || '' }}
+          PAIDWEN_TEST_PASSWORD: ${{ inputs.environment == 'paidwen' && secrets.PAIDWEN_TEST_PASSWORD || '' }}
+          PAIDWEN_STRIPE_TEST_KEY: ${{ inputs.environment == 'paidwen' && secrets.PAIDWEN_STRIPE_TEST_KEY || '' }}
+          PAIDWEN_MODEL_KEY: ${{ inputs.environment == 'paidwen' && secrets.PAIDWEN_MODEL_KEY || '' }}
+          PAIDWEN_ENV: ${{ inputs.environment == 'paidwen' && secrets.PAIDWEN_ENV || '' }}

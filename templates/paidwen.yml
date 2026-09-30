@@ -1,0 +1,46 @@
+name: Paidwen
+run-name: "Paidwen verification of pull request #${{ inputs.pr }}"
+on:
+  workflow_dispatch:
+    inputs:
+      verification:
+        description: Verification
+        type: string
+        required: true
+      pr:
+        description: Pull request
+        type: string
+        required: true
+      head:
+        description: Head commit
+        type: string
+        required: true
+      base:
+        description: Base commit
+        type: string
+        required: true
+      environment:
+        description: Environment
+        type: choice
+        options:
+          - paidwen
+          - paidwen-fork
+        required: true
+      api:
+        description: Paidwen API
+        type: string
+        required: true
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  verify:
+    uses: RaselisonToky/paidwen-action/.github/workflows/verify.yml@v1
+    secrets: inherit
+    with:
+      verification: ${{ inputs.verification }}
+      pr: ${{ inputs.pr }}
+      head: ${{ inputs.head }}
+      base: ${{ inputs.base }}
+      environment: ${{ inputs.environment }}
+      api: ${{ inputs.api }}
