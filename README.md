@@ -26,6 +26,11 @@ Put the test secrets in the GitHub environment named `paidwen`: `PAIDWEN_TEST_LO
 
 The GitHub App has no Contents permission, and Paidwen never requests the diff of a pull request.
 
+## A large app can run on a larger runner
+
+- The job runs on `ubuntu-latest`. Set `runs-on` under `with:` in your workflow file to a larger runner, or to a JSON list of labels for a self-hosted runner.
+- On a GitHub-hosted runner, the job frees disk space before the build when less than 40 GB is left.
+
 ## The engine is signed
 
 The action holds only a small bootstrap, [bootstrap/exchange.mjs](bootstrap/exchange.mjs), with no dependency. The engine comes from Paidwen at each run, and the bootstrap runs it only when four checks pass:

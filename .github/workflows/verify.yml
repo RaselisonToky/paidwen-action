@@ -26,10 +26,20 @@ on:
         description: The address of the Paidwen API.
         type: string
         required: true
+      runs-on:
+        description: The runner of the job, a label or a JSON list of labels.
+        type: string
+        required: false
+        default: ubuntu-latest
+      free-disk:
+        description: Free the disk of a GitHub-hosted runner before the build.
+        type: boolean
+        required: false
+        default: true
 jobs:
   verify:
     name: Verification
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
     timeout-minutes: 60
     environment: ${{ inputs.environment == 'paidwen' && 'paidwen' || 'paidwen-fork' }}
     permissions:
@@ -40,10 +50,22 @@ jobs:
         shell: bash
         run: echo "PAIDWEN_DEADLINE=$(( $(date +%s) + 50 * 60 ))" >> "$GITHUB_ENV"
 
+      - name: Free the disk of the runner
+        if: inputs.free-disk && runner.environment == 'github-hosted'
+        continue-on-error: true
+        shell: bash
+        run: |
+          available="$(df --output=avail -BG / | tail -1 | tr -dc '0-9')"
+          if [ "${available:-0}" -lt 40 ]; then
+            sudo docker image prune --all --force > /dev/null 2>&1 || true
+            nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL > /dev/null 2>&1 &
+          fi
+          df -h / | tail -1
+
       - name: Check out the pull request
         id: checkout
         continue-on-error: true
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.head }}
           fetch-depth: 0
@@ -52,7 +74,7 @@ jobs:
       - name: Check out the pull request from its fork
         if: steps.checkout.outcome == 'failure' && inputs.pr != ''
         continue-on-error: true
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           fetch-depth: 0
@@ -86,7 +108,7 @@ jobs:
       - name: Fetch the base commit
         if: steps.commits.outputs.ready == 'true' && steps.commits.outputs.base-missing == 'true'
         continue-on-error: true
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.base }}
           fetch-depth: 0
